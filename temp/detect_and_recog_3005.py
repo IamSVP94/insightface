@@ -220,30 +220,18 @@ if __name__ == '__main__':
         p_bar.set_description(f'{img_path}')
         img = cv2.imread(str(img_path))
         faces = detector.get(img)
-
-        light_img = Person.change_brightness(img, diff=50)
-        dark_img = Person.change_brightness(img, diff=-50)
-        darkest_img = Person.change_brightness(img, diff=-75)
-        bright_imgs = [img, darkest_img, light_img, dark_img]
-        bright_imgs_ready = []
-
-        for bright_idx, img in enumerate(bright_imgs):
-            whoes = []
-            for face_idx, face in enumerate(faces):
-                emb = np.expand_dims(face['embedding'], axis=0)
-                box = face.bbox.astype(np.int32)
-                crop_face = img[box[1]:box[3], box[0]:box[2]]
-                crop_face = Person.change_brightness(crop_face, etalon=bright_etalon)
-                unknown = Person(img=crop_face, change_brightness=True, show=False)
-                face.brightness = unknown.brightness
-                near_dist = unknown.get_label(persons, threshold=recog_tresh, full_img=img, face=face, show=False)
-                whoes.append((unknown.label, round(near_dist, 4), unknown.color))
-            dimg = detector.draw_on(img, faces, whoes=whoes, show_kps=False, show=False)
-            bright_imgs_ready.append(dimg)
-        vis1 = np.concatenate(bright_imgs_ready[:2], axis=1)
-        vis2 = np.concatenate(bright_imgs_ready[2:], axis=1)
-        vis = np.concatenate((vis1, vis2), axis=0)
-        cv2.imwrite(str(new_img_dir_path / f'{img_path.name}'), vis)
+        whoes = []
+        for face_idx, face in enumerate(faces):
+            emb = np.expand_dims(face['embedding'], axis=0)
+            box = face.bbox.astype(np.int32)
+            crop_face = img[box[1]:box[3], box[0]:box[2]]
+            crop_face = Person.change_brightness(crop_face, etalon=bright_etalon)
+            unknown = Person(img=crop_face, change_brightness=True, show=False)
+            face.brightness = unknown.brightness
+            near_dist = unknown.get_label(persons, threshold=recog_tresh, full_img=img, face=face, show=False)
+            whoes.append((unknown.label, round(near_dist, 4), unknown.color))
+        dimg = detector.draw_on(img, faces, whoes=whoes, show_kps=False, show=False)
+        cv2.imwrite(str(new_img_dir_path / f'{img_path.name}'), dimg)
         # exit()
         if img_idx > 50:
             exit()
