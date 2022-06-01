@@ -309,3 +309,4 @@ for person in all_persons:
     df.loc[person.label, :] = for_write
 
 df.to_csv(f'n_persons={n_persons + len(all_persons)}_bright_etalon={bright_etalon}_embeddings.csv')
+# TODO: save all crop face in special dir
