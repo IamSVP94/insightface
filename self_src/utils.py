@@ -226,8 +226,28 @@ class Person:
             img = img
         if makemask:
             faces = detector.get(img)
+            # if len(faces) != 1:  # TODO: add this condition for prod!!!
+            #     vis = img
+            #     h, w, _ = img.shape
+            #     for face in faces:
+            #         box = face.bbox.astype(np.int32)
+            #         crop_face = img[box[1]:box[3], box[0]:box[2]]
+            #         cimg = draw_(crop_face, face.kps)
+            #         curr_h, curr_w, _ = cimg.shape
+            #         top = int((h - curr_h) / 2)
+            #         bottom = h - curr_h - top
+            #         left, right = 10, 10
+            #         cimg = cv2.copyMakeBorder(cimg, top, bottom, left, right, cv2.BORDER_CONSTANT)
+            #         vis = np.concatenate((vis, cimg), axis=1)
+            #
+            #     h, w, _ = vis.shape
+            #     vis = cv2.resize(vis, (int(w / 2), int(h / 2)))
+            #     cv2.imshow(f'there is {len(faces)} faces, Should be only 1!!!', vis)
+            #     cv2.waitKey()
+            #     assert len(
+            #         faces) == 1, f'"{len(faces)}" persons on the photo "{self.path}"'  # only 1 face for etalon!!!
+            #
             face = faces[0]
-            assert len(faces) == 1, f'"{len(faces)}" persons on the photo "{self.path}"'  # only 1 face for etalon!!!
             box = face.bbox.astype(np.int32)
             self.kps = face.kps
             img = img[box[1]:box[3], box[0]:box[2]]
@@ -281,6 +301,7 @@ class Person:
 
     @staticmethod
     def change_brightness(img, etalon=None, diff=None, show=False):  # etalon=150
+        assert (etalon is not None) or (diff is not None), f'You shold set etalon or diff'
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv)
         orig_br = int(np.mean(v))

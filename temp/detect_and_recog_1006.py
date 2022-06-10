@@ -2,20 +2,17 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from self_src.utils import Person, detector, PARENT_DIR, turnmetric, bright_etalon, get_random_color, \
-    persons_list_from_csv
+from self_src.utils import Person, detector, PARENT_DIR, turnmetric, bright_etalon, get_random_color, persons_list_from_csv
 
-align = True
 recog_tresh = 0.6
-n_persons = 2050
 
-new_img_dir_path = PARENT_DIR / 'temp' / f'bright_{bright_etalon}_1006_n_persons={n_persons}_turn={turnmetric}_recog_tresh={recog_tresh}'
+new_img_dir_path = PARENT_DIR / 'temp' / f'1006_turn={turnmetric}_recog_tresh={recog_tresh}'
 new_img_dir_path.mkdir(exist_ok=True, parents=True)
 print(f'save to {new_img_dir_path}')
 
 # TODO: add new class for img (orig, face, norm_face, with_bbox, ...)
 
-df_path = f'/home/psv/PycharmProjects/insightface/temp/n_persons=2513_bright_etalon={bright_etalon}_embeddings.csv'
+df_path = f'/home/psv/PycharmProjects/insightface/temp/n_persons=2513_bright_etalon=150_embeddings.csv'
 all_persons = persons_list_from_csv(df_path)
 
 show_p = False
@@ -54,11 +51,10 @@ if __name__ == '__main__':
         for face_idx, face in enumerate(faces):
             emb = np.expand_dims(face['embedding'], axis=0)
             box = face.bbox.astype(np.int32)
-
             crop_face = img[box[1]:box[3], box[0]:box[2]]
             crop_face = Person.change_brightness(crop_face, etalon=bright_etalon)
 
-            unknown = Person(img=crop_face, change_brightness=True, show=False, align=True, kps=face.kps)
+            unknown = Person(img=crop_face, change_brightness=True, align=True, kps=face.kps, show=False)
             face.brightness = unknown.brightness
 
             near_dist = unknown.get_label(all_persons, threshold=recog_tresh, face=face, show=False)
