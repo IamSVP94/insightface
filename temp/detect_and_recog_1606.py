@@ -7,11 +7,11 @@ from self_src.utils import Person, detector, PARENT_DIR, turnmetric, bright_etal
 
 recog_tresh = 0.6
 
-new_img_dir_path = PARENT_DIR / 'temp' / f'office33_turn={turnmetric}_recog_tresh={recog_tresh}'
+new_img_dir_path = PARENT_DIR / 'temp' / f'1548_turn={turnmetric}_recog_tresh={recog_tresh}'
 new_img_dir_path.mkdir(exist_ok=True, parents=True)
 print(f'\nsave to {new_img_dir_path}')
 
-df_path = f'/home/psv/PycharmProjects/insightface/temp/all_persons=5723_bright_etalon=150_embeddings.csv'
+df_path = f'/home/psv/PycharmProjects/insightface/temp/full_persons=5728_bright_etalon=150_embeddings.csv'
 df_persons = pd.read_csv(df_path, index_col=0)
 all_persons = persons_list_from_csv(df_path)
 
