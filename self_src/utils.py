@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import random
 import math
 
-PARENT_DIR = Path('/home/psv/PycharmProjects/insightface/')
+PARENT_DIR = Path('/home/vid/hdd/projects/PycharmProjects/insightface/')
 bright_etalon = 150  # constant 150
 turnmetric = 20  # constant 20
 
@@ -40,7 +40,7 @@ def draw_(img, landmarks):
 
 
 # this function copied from the deepface repository: https://github.com/serengil/deepface/blob/master/deepface/commons/functions.py
-def alignment_procedure(img, landmark):
+def alignment_procedure_old(img, landmark):
     landmark = landmark.astype(np.int32)
     right_eye, left_eye, nose, right_mouth, left_mouth = landmark
     e_center = (int((right_eye[0] + left_eye[0]) / 2), int((right_eye[1] + left_eye[1]) / 2))  # eyes center
@@ -127,6 +127,238 @@ def alignment_procedure(img, landmark):
             # plt.show()
             # cv2.imshow(title, vis)
             # cv2.waitKey()
+
+    # -----------------------
+    return img, landmark  # return img & landmark anyway
+
+
+def alignment_procedure_new(full_img, box, landmark):
+    def _get_new_landmark(landmark, image_center, box):
+        new_landmark = []
+        for x, y in landmark:
+            x, y = turn_landmark(x - image_center[0], y - image_center[1])
+            x += image_center[0]
+            y += image_center[1]
+            new_landmark.append((x, y))
+        if new_landmark:
+            xmin, ymin, xmax, ymax = box
+            # return np.array(new_landmark)
+            return np.array([[k[0] - xmin, k[1] - ymin] for k in new_landmark])
+        return landmark
+
+    def _get_new_box(box, image_center, cos):
+        orig_box_w = box[2] - box[0]
+        orig_box_h = box[3] - box[1]
+
+        tl = (box[0], box[1])
+        tr = (box[2], box[1])
+        dl = (box[0], box[3])
+        dr = (box[2], box[3])
+
+        new_box = []
+        for x, y in [tl, tr, dl, dr]:
+            x, y = turn_landmark(x - image_center[0], y - image_center[1])
+            x += image_center[0]
+            y += image_center[1]
+            new_box.append((x, y))
+        if new_box:
+            xmin = max(0, min([i[0] for i in new_box]))
+            ymin = max(0, min([i[1] for i in new_box]))
+            xmax = min(full_img.shape[1], max([i[0] for i in new_box]))
+            ymax = min(full_img.shape[0], max([i[1] for i in new_box]))
+
+            half_diff_w = int((orig_box_w - (xmax - xmin)) / 2 / cos)
+            half_diff_h = int((orig_box_h - (ymax - ymin)) / 2)
+            return np.array([xmin - half_diff_w, ymin - half_diff_h, xmax + half_diff_w, ymax + half_diff_h])
+        else:
+            return box
+
+    landmark = landmark.astype(np.int32)
+    img = full_img[box[1]:box[3], box[0]:box[2]]
+    right_eye, left_eye, nose, right_mouth, left_mouth = landmark
+    e_center = (int((right_eye[0] + left_eye[0]) / 2), int((right_eye[1] + left_eye[1]) / 2))  # eyes center
+    m_center = (int((right_mouth[0] + left_mouth[0]) / 2), int((right_mouth[1] + left_mouth[1]) / 2))  # mouth center
+
+    # -----------------------
+    upside_down = False
+    if m_center[1] < e_center[1]:
+        upside_down = True
+    # -----------------------
+    # find rotation direction
+
+    if m_center[0] > e_center[0]:
+        point_3rd = (m_center[0], e_center[1])
+        direction = -1  # rotate same direction to clock
+    else:
+        point_3rd = (e_center[0], m_center[1])
+        direction = 1  # rotate inverse direction of clock
+
+    # -----------------------
+    # find length of triangle edges
+    a = findEuclideanDistance(np.array(e_center), np.array(point_3rd))
+    b = findEuclideanDistance(np.array(m_center), np.array(point_3rd))
+    c = findEuclideanDistance(np.array(m_center), np.array(e_center))
+    # -----------------------
+
+    # apply cosine rule
+    if b != 0 and c != 0:  # this multiplication causes division by zero in cos_a calculation
+        cos_a = (b * b + c * c - a * a) / (2 * b * c)
+        # PR15: While mathematically cos_a must be within the closed range [-1.0, 1.0], floating point errors would produce cases violating this
+        # In fact, we did come across a case where cos_a took the value 1.0000000169176173, which lead to a NaN from the following np.arccos step
+        cos_a = min(1.0, max(-1.0, cos_a))
+
+        angle_rad = np.arccos(cos_a)  # angle in radian
+        angle = (angle_rad * 180) / math.pi  # radian to degree
+
+        # -----------------------
+        # rotate base image
+
+        if direction == 1:
+            angle = 90 - angle
+
+        if upside_down == True:
+            angle = 90 - angle
+
+        cos_a, sin_a = np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))
+
+        image_center = tuple(np.array(img.shape[1::-1]) / 2)
+        # image_center = int(image_center[0] + box[0]), int(image_center[1] + box[1])
+        image_center = int((image_center[0] + box[0]) / cos_a), int((image_center[1] + box[1]) / cos_a)
+
+        # params for rotate transformation
+        if direction == 1:
+            rot_mat_angle = angle
+            turn_landmark = lambda x, y: (int(x * cos_a + y * sin_a), int(-x * sin_a + y * cos_a))
+        else:
+            rot_mat_angle = -angle
+            turn_landmark = lambda x, y: (int(x * cos_a - y * sin_a), int(x * sin_a + y * cos_a))
+
+        rot_mat = cv2.getRotationMatrix2D(image_center, rot_mat_angle, 1.0)
+        # rotate img (around img center)
+        full_img = cv2.warpAffine(full_img, rot_mat, full_img.shape[1::-1], flags=cv2.INTER_LINEAR)
+        # rotate box (around img center)
+        box = _get_new_box(box, image_center, cos=cos_a)
+        # rotate landmark (around img center)
+        landmark = _get_new_landmark(landmark, image_center, box)
+
+        img = full_img[box[1]:box[3], box[0]:box[2]]
+
+    # -----------------------
+    return img, landmark  # return img & landmark anyway
+
+
+def alignment_procedure(full_img, box, landmark):
+    def _get_new_landmark(landmark, image_center, box):
+        new_landmark = []
+        for x, y in landmark:
+            x, y = turn_landmark(x - image_center[0], y - image_center[1])
+            x += image_center[0]
+            y += image_center[1]
+            new_landmark.append((x, y))
+        if new_landmark:
+            xmin, ymin, xmax, ymax = box
+            return np.array([[k[0] - xmin, k[1] - ymin] for k in new_landmark])
+        return landmark
+
+    def _get_new_box(box, image_center, cos):
+        orig_box_w = box[2] - box[0]
+        orig_box_h = box[3] - box[1]
+
+        tl = (box[0], box[1])
+        tr = (box[2], box[1])
+        dl = (box[0], box[3])
+        dr = (box[2], box[3])
+
+        new_box = []
+        for x, y in [tl, tr, dl, dr]:
+            x, y = turn_landmark(x - image_center[0], y - image_center[1])
+            x += image_center[0]
+            y += image_center[1]
+            new_box.append((x, y))
+        if new_box:
+            xmin = max(0, min([i[0] for i in new_box]))
+            ymin = max(0, min([i[1] for i in new_box]))
+            xmax = min(full_img.shape[1], max([i[0] for i in new_box]))
+            ymax = min(full_img.shape[0], max([i[1] for i in new_box]))
+
+            half_diff_w = int((orig_box_w - (xmax - xmin)) / 2 / cos)
+            half_diff_h = int((orig_box_h - (ymax - ymin)) / 2)
+            return np.array([xmin - half_diff_w, ymin - half_diff_h, xmax + half_diff_w, ymax + half_diff_h])
+        else:
+            return box
+
+    def _get_rotate_params(m_center, e_center):
+        upside_down = False
+        if m_center[1] < e_center[1]:
+            upside_down = True
+        # find rotation direction
+        if m_center[0] > e_center[0]:
+            direction = -1  # rotate same direction to clock
+            point_3rd = (m_center[0], e_center[1])
+        else:
+            direction = 1  # rotate inverse direction of clock
+            point_3rd = (e_center[0], m_center[1])
+        return upside_down, direction, point_3rd
+
+    def _get_angle(m_center, e_center, point_3rd):
+        # find length of triangle edges
+        a = findEuclideanDistance(np.array(e_center), np.array(point_3rd))
+        b = findEuclideanDistance(np.array(m_center), np.array(point_3rd))
+        c = findEuclideanDistance(np.array(m_center), np.array(e_center))
+        # apply cosine rule
+        if b != 0 and c != 0:  # this multiplication causes division by zero in cos_a calculation
+            cos_a = (b * b + c * c - a * a) / (2 * b * c)
+            # PR15: While mathematically cos_a must be within the closed range [-1.0, 1.0], floating point errors would produce cases violating this
+            # In fact, we did come across a case where cos_a took the value 1.0000000169176173, which lead to a NaN from the following np.arccos step
+            cos_a = min(1.0, max(-1.0, cos_a))
+
+            angle_rad = np.arccos(cos_a)  # angle in radian
+            angle = (angle_rad * 180) / math.pi  # radian to degree
+            return angle
+        else:
+            return None
+
+    landmark = landmark.astype(np.int32)
+    right_eye, left_eye, nose, right_mouth, left_mouth = landmark
+    e_center = (int((right_eye[0] + left_eye[0]) / 2), int((right_eye[1] + left_eye[1]) / 2))  # eyes center
+    m_center = (int((right_mouth[0] + left_mouth[0]) / 2), int((right_mouth[1] + left_mouth[1]) / 2))  # mouth center
+
+    upside_down, direction, point_3rd = _get_rotate_params(m_center, e_center)
+
+    angle = _get_angle(m_center, e_center, point_3rd)
+    if angle is None:
+        xmin, ymin, xmax, ymax = box
+        landmark = np.array([[k[0] - xmin, k[1] - ymin] for k in landmark])
+        img = full_img[ymin:ymax, xmin:xmax]
+        return img, landmark
+
+    if direction == 1:
+        angle = 90 - angle
+
+    if upside_down == True:
+        angle = 90 - angle  # TODO: test it
+
+    cos_a, sin_a = np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))
+
+    image_center = int((box[2] - box[0]) / 2 + box[0]), int((box[3] - box[1]) / 2 + box[1])
+
+    # params for rotate transformation
+    if direction == 1:
+        rot_mat_angle = angle
+        turn_landmark = lambda x, y: (int(x * cos_a + y * sin_a), int(-x * sin_a + y * cos_a))
+    else:
+        rot_mat_angle = -angle
+        turn_landmark = lambda x, y: (int(x * cos_a - y * sin_a), int(x * sin_a + y * cos_a))
+
+    rot_mat = cv2.getRotationMatrix2D(image_center, rot_mat_angle, 1.0)
+    # rotate img (around img center)
+    full_img = cv2.warpAffine(full_img, rot_mat, full_img.shape[1::-1], flags=cv2.INTER_LINEAR)
+    # rotate box (around img center)
+    box = _get_new_box(box, image_center, cos=cos_a)
+    # rotate landmark (around img center)
+    landmark = _get_new_landmark(landmark, image_center, box)
+
+    img = full_img[box[1]:box[3], box[0]:box[2]]
 
     # -----------------------
     return img, landmark  # return img & landmark anyway
@@ -252,8 +484,11 @@ class Person:
             img = cv2.imread(self.path)
         else:
             img = img
+        self._full_img = img
         if makemask:
-            faces = detector.get(img)
+            faces = detector.get(img, change_kpss_for_crop=False)
+            # faces = detector.get(img, change_kpss_for_crop=True)
+
             # faces = find_face(str(self.path))
 
             # if len(faces) != 1:  # TODO: add this condition for prod!!!
@@ -281,8 +516,9 @@ class Person:
             box = face.bbox.astype(np.int32)
             self.kps = face.kps
             img = img[box[1]:box[3], box[0]:box[2]]
-        if align and self.kps is not None:
-            img, self.kps = alignment_procedure(img, landmark=self.kps)
+            if align and self.kps is not None and box is not None:
+                img, self.kps = alignment_procedure(self._full_img, box=box, landmark=self.kps)
+                # img, self.kps = alignment_procedure_old(img, landmark=self.kps)
         if change_brightness:
             self.img = self.change_brightness(img, etalon=bright_etalon)
         else:
@@ -306,8 +542,6 @@ class Person:
 
     def _get_embedding(self):
         return self.emb_net.get(self.img, show=False)
-
-        # return labels, embeddings
 
     def get_label(self, persons, threshold=0.7, metric='cosine', face=None, show=False):
         dists = []
