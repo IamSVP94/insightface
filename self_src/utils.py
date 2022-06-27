@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import pandas as pd
+import requests
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from insightface.model_zoo import ArcFaceONNX
@@ -368,14 +369,16 @@ class ArcFaceONNXVL(ArcFaceONNX):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def get(self, img, face=None, show=False):
+    def get(self, img, face=None, show=True):
         if face:
             aimg, face.kps = alignment_procedure(img, landmark=face.kps)
         else:
             aimg = cv2.resize(img, (112, 112))
         if show:
-            cv2.imshow('35 aimg.shape', aimg)
-            cv2.waitKey()
+            # cv2.imshow('35 aimg.shape', aimg)
+            # cv2.waitKey()
+            plt.imshow(aimg)
+            plt.show()
         embedding = self.get_feat(aimg).flatten()
         if face:
             face.embedding = embedding
@@ -524,8 +527,9 @@ class Person:
         else:
             self.img = img
         if show and self.img is not None:
-            cv2.imshow(f'"{self.label}" {self.path}', self.img)
-            cv2.waitKey()
+            plt.title(f'"{self.label}" {self.path}')
+            plt.imshow(cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB))
+            plt.show()
         self.emb_net = emb_net
 
         if show_kps:
@@ -541,7 +545,7 @@ class Person:
             self.brightness = bright_etalon
 
     def _get_embedding(self):
-        return self.emb_net.get(self.img, show=False)
+        return self.emb_net.get(self.img)
 
     def get_label(self, persons, threshold=0.7, metric='cosine', face=None, show=False):
         dists = []
@@ -556,7 +560,7 @@ class Person:
         if dists[who] < threshold and self.turn == 'center':
             self.label = persons[who].label
             self.color = persons[who].color
-        return dists[who]
+        return round(dists[who], 5)
 
     @staticmethod
     def get_brightness(img):
@@ -638,3 +642,13 @@ def persons_list_from_csv(df_path):
         person = Person(label=label, color=get_random_color(), embedding=emb, change_brightness=False)
         persons.append(person)
     return persons
+
+def get_imgs_thispersondoesnotexist(n = 1):
+    imgs = []
+    for i in range(n):
+        img_str = requests.get('https://www.thispersondoesnotexist.com/image?').content
+        nparr = np.frombuffer(img_str, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        imgs.append(img_rgb)
+    return imgs
