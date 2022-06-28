@@ -11,6 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import random
 import math
+import onnxruntime as ort
 
 PARENT_DIR = Path('/home/vid/hdd/projects/PycharmProjects/insightface/')
 bright_etalon = 150  # constant 150
@@ -369,7 +370,7 @@ class ArcFaceONNXVL(ArcFaceONNX):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def get(self, img, face=None, show=True):
+    def get(self, img, face=None, show=False):
         if face:
             aimg, face.kps = alignment_procedure(img, landmark=face.kps)
         else:
@@ -459,6 +460,30 @@ def find_face(filename, threshold=0.3, model=detect_model):
     return facelist
 
 
+def preprocess_input(img, mean=None, std=None, input_space="RGB", size=(112, 112)):
+    max_pixel_value = 255.0
+    if input_space == "RGB":
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    resizeimg = cv2.resize(img, size)
+
+    img = resizeimg.astype(np.float32)
+    if mean is not None:
+        mean = np.array(mean, dtype=np.float32)
+        mean *= max_pixel_value
+        img -= mean
+
+    if std is not None:
+        std = np.array(std, dtype=np.float32)
+        std *= max_pixel_value
+
+        denominator = np.reciprocal(std, dtype=np.float32)
+        img *= denominator
+
+    img = np.moveaxis(img, -1, 0)
+    img = img[np.newaxis, :, :, :]
+    return img
+
+
 detector = RetinaDetector(
     providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
     allowed_modules=['detection', 'recognition'],
@@ -471,6 +496,10 @@ session = PickableInferenceSession(
     providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 recognator = ArcFaceONNXVL(model_file=PARENT_DIR / 'models/IResNet100l.onnx', session=session)
 recognator.prepare(ctx_id=0)
+
+frame_selector_model_path = '/home/vid/hdd/projects/PycharmProjects/insightface/models/ConvNext_selector.onnx'
+frame_selector_model = ort.InferenceSession(frame_selector_model_path, providers=['CUDAExecutionProvider'])
+frame_selector_model_input_name = frame_selector_model.get_inputs()[0].name
 
 
 class Person:
@@ -489,7 +518,7 @@ class Person:
             img = img
         self._full_img = img
         if makemask:
-            faces = detector.get(img, change_kpss_for_crop=False)
+            faces = detector.get(img, change_kpss_for_crop=True)
             # faces = detector.get(img, change_kpss_for_crop=True)
 
             # faces = find_face(str(self.path))
@@ -547,7 +576,7 @@ class Person:
     def _get_embedding(self):
         return self.emb_net.get(self.img)
 
-    def get_label(self, persons, threshold=0.7, metric='cosine', face=None, show=False):
+    def get_label(self, persons, threshold=0.7, metric='cosine', face=None, show=False, use_nn=False):
         dists = []
         for person in persons:
             dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
@@ -557,6 +586,13 @@ class Person:
         self.turn_param = -999
         if face is not None:
             self.turn_param, self.turn = Person.get_turn(self.kps, self.img, treshold=turnmetric, show=show)
+        if use_nn and self.turn == 'center':
+            img_for_selector = preprocess_input(self.img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            selector_out = frame_selector_model.run(None, {frame_selector_model_input_name: img_for_selector})[0]
+            good_frame = np.argmax(selector_out)  # bad = 0, good = 1
+            if good_frame == 0:  # if "bad"
+                self.turn = 'badcenter'
+            print('self.turn =', self.turn, selector_out, good_frame)
         if dists[who] < threshold and self.turn == 'center':
             self.label = persons[who].label
             self.color = persons[who].color
@@ -570,7 +606,7 @@ class Person:
 
     @staticmethod
     def change_brightness(img, etalon=None, diff=None, show=False):  # etalon=150
-        assert (etalon is not None) or (diff is not None), f'You shold set etalon or diff'
+        assert (etalon is not None) or (diff is not None), f'You should set etalon or diff'
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv)
         orig_br = int(np.mean(v))
@@ -643,12 +679,19 @@ def persons_list_from_csv(df_path):
         persons.append(person)
     return persons
 
-def get_imgs_thispersondoesnotexist(n = 1):
+
+def get_imgs_thispersondoesnotexist(n=1, colors='RGB', show=False):
     imgs = []
     for i in range(n):
         img_str = requests.get('https://www.thispersondoesnotexist.com/image?').content
         nparr = np.frombuffer(img_str, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        imgs.append(img_rgb)
+        if colors == 'RGB':
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if show:
+            if colors != 'RGB':
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            plt.imshow(img)
+            plt.show()
+        imgs.append(img)
     return imgs
