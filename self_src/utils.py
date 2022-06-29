@@ -389,26 +389,73 @@ class ArcFaceONNXVL(ArcFaceONNX):
 class RetinaDetector(FaceAnalysis):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.use_roi = False
 
-    def get(self, img, max_num=0, change_kpss_for_crop=True):
+    # @staticmethod
+    def _get_roi(self, img, top_proc, bottom_proc, left_proc, right_proc, show=False):
+        orig_h, orig_w, _ = img.shape
+        if top_proc + bottom_proc >= 100:
+            top_proc, bottom_proc = 0, 0
+        if left_proc + right_proc >= 100:
+            left_proc, right_proc = 0, 0
+
+        x_min = max(0, int(orig_h / 100 * top_proc))  # for correct crop
+        x_max = min(orig_h, int(orig_h / 100 * (100 - bottom_proc)))  # for correct crop
+        y_min = max(0, int(orig_w / 100 * left_proc))  # for correct crop
+        y_max = min(orig_w, int(orig_w / 100 * (100 - right_proc)))  # for correct crop
+
+        img_roi = img[x_min:x_max, y_min:y_max]
+        img_roi_orig_size = cv2.copyMakeBorder(src=img_roi, borderType=cv2.BORDER_CONSTANT,
+                                               top=x_min, bottom=orig_h - x_max,
+                                               left=y_min, right=orig_w - y_max)
+        if show:
+            vis = np.concatenate((img, img_roi_orig_size), axis=0)
+            plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+            plt.title(
+                f'top_proc={top_proc}, bottom_proc={bottom_proc},\nleft_proc={left_proc}, right_proc={right_proc}')
+            plt.show()
+        self.use_roi = True
+        self.roi_points = {'x_min': x_min, 'y_min': y_min, 'x_max': x_max, 'y_max': y_max}
+        return img_roi_orig_size
+
+    def plot_roi(self, img, color=((0, 255, 0)), thickness=1):
+        img_with_roi = cv2.rectangle(img.copy(),
+                                     (self.roi_points['y_min'], self.roi_points['x_min']),
+                                     (self.roi_points['y_max'], self.roi_points['x_max']),
+                                     color, thickness)
+        return img_with_roi
+
+    def get(self, img, max_num=0, change_kpss_for_crop=True, use_roi=None, min_face_size=None):
+        if use_roi is not None:
+            img = self._get_roi(img, show=False,
+                                top_proc=use_roi[0], bottom_proc=use_roi[1],
+                                left_proc=use_roi[2], right_proc=use_roi[3],
+                                )
         bboxes, kpss = self.det_model.detect(img, max_num=max_num, metric='default')
         if bboxes.shape[0] == 0:
             return []
         ret = []
         for i in range(bboxes.shape[0]):
             bbox = bboxes[i, 0:4]
+            xmin, ymin, xmax, ymax = bbox
+            if min_face_size is not None:
+                print()
+                print(xmax - xmin, min_face_size[0])
+                print(ymax - ymin, min_face_size[1])
+                if (xmax - xmin < min_face_size[0]) or (ymax - ymin < min_face_size[1]):
+                    continue
             det_score = bboxes[i, 4]
             kps = None
             if kpss is not None:
                 kps = kpss[i]
             if change_kpss_for_crop:
-                xmin, ymin, xmax, ymax = bbox
                 kps = np.array([[k[0] - xmin, k[1] - ymin] for k in kps])
             face = Face(bbox=bbox, kps=kps, det_score=det_score)
             for taskname, model in self.models.items():
                 if taskname == 'detection':
                     continue
                 model.get(img, face)
+            # TODO: face_size implement here
             ret.append(face)
         return ret
 
@@ -695,3 +742,45 @@ def get_imgs_thispersondoesnotexist(n=1, colors='RGB', show=False):
             plt.show()
         imgs.append(img)
     return imgs
+
+
+def get_ROI_old(img, x_min, y_min, x_max, y_max, show=True):
+    orig_h, orig_w, _ = img.shape
+    x_min, x_max = max(0, x_min), min(orig_h, x_max)  # for correct crop
+    y_min, y_max = max(0, y_min), min(orig_w, y_max)  # for correct crop
+
+    img_roi = img[x_min:x_max, y_min:y_max]
+    if show:
+        img_roi_orig_size = cv2.copyMakeBorder(src=img_roi, borderType=cv2.BORDER_CONSTANT,
+                                               top=x_min, bottom=orig_h - x_max,
+                                               left=y_min, right=orig_w - y_max)
+        vis = np.concatenate((img, img_roi_orig_size), axis=0)
+        plt.imshow(vis)
+        plt.title(f'get_ROI\nx_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}')
+        plt.show()
+    return img_roi
+
+
+def get_ROI(img, top_proc, bottom_proc, left_proc, right_proc, show=False):
+    print(img.shape)
+    orig_h, orig_w, _ = img.shape
+    if top_proc + bottom_proc >= 100:
+        top_proc, bottom_proc = 0, 0
+    if left_proc + right_proc >= 100:
+        left_proc, right_proc = 0, 0
+
+    x_min = max(0, int(orig_h / 100 * top_proc))  # for correct crop
+    x_max = min(orig_h, int(orig_h / 100 * (100 - bottom_proc)))  # for correct crop
+    y_min = max(0, int(orig_w / 100 * left_proc))  # for correct crop
+    y_max = min(orig_w, int(orig_w / 100 * (100 - right_proc)))  # for correct crop
+
+    img_roi = img[x_min:x_max, y_min:y_max]
+    img_roi_orig_size = cv2.copyMakeBorder(src=img_roi, borderType=cv2.BORDER_CONSTANT,
+                                           top=x_min, bottom=orig_h - x_max,
+                                           left=y_min, right=orig_w - y_max)
+    if show:
+        vis = np.concatenate((img, img_roi_orig_size), axis=0)
+        plt.imshow(vis)
+        plt.title(f'top_proc={top_proc}, bottom_proc={bottom_proc},\nleft_proc={left_proc}, right_proc={right_proc}')
+        plt.show()
+    return img_roi_orig_size
