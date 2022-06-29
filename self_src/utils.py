@@ -455,7 +455,6 @@ class RetinaDetector(FaceAnalysis):
                 if taskname == 'detection':
                     continue
                 model.get(img, face)
-            # TODO: face_size implement here
             ret.append(face)
         return ret
 

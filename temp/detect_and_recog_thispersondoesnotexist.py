@@ -1,26 +1,20 @@
-import random
-
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from pathlib import Path
 from self_src.utils import Person, detector, PARENT_DIR, turnmetric, persons_list_from_csv, \
     get_imgs_thispersondoesnotexist
 
 recog_tresh = 0.6
 n_persons = 9999999
 
-out_dir = Path('/home/vid/hdd/projects/PycharmProjects/insightface/temp/faces_crops/fromgoodtobadfaces/')
-out_dir.mkdir(parents=True, exist_ok=True)
-
-new_img_dir_path = PARENT_DIR / 'temp' / f'2706_newnew_turn={turnmetric}_recog_tresh={recog_tresh}'
+new_img_dir_path = PARENT_DIR / 'temp' / f'2806_newnew_turn={turnmetric}_recog_tresh={recog_tresh}'
 print(f'save to {new_img_dir_path}')
 
 # TODO: add new class for img (orig, face, norm_face, with_bbox, ...)
 
-df_path = f'/home/vid/hdd/projects/PycharmProjects/insightface/temp/officeonly.csv'
+# df_path = f'/home/vid/hdd/projects/PycharmProjects/insightface/temp/officeonly.csv'
+df_path = f'/home/vid/hdd/projects/PycharmProjects/insightface/temp/full2106new_persons=5732_bright_etalon=150_embeddings.csv'
 df_persons = pd.read_csv(df_path, index_col=0)
 all_persons = persons_list_from_csv(df_path)
 
@@ -28,7 +22,10 @@ persons_info = dict()
 if __name__ == '__main__':
     p_bar = tqdm(range(n_persons), colour='green')
     for i in p_bar:
-        img = get_imgs_thispersondoesnotexist(colors='RGB', show=False)[0]
+        try:
+            img = get_imgs_thispersondoesnotexist(colors='RGB', show=False)[0]
+        except cv2.error:
+            continue
 
         faces = detector.get(img)
         whoes = []
@@ -56,11 +53,10 @@ if __name__ == '__main__':
                     else:
                         persons_info[face.label] = [face.rec_score]
 
-                    new_ready_path = new_img_dir_path / face.label / f'{i}.jpg'
-                    new_ready_path.parent.mkdir(exist_ok=True, parents=True)
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                     dimg = detector.draw_on(
-                        cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
+                        img,
                         faces,
                         whoes=whoes,
                         show_kps=True,
@@ -70,21 +66,27 @@ if __name__ == '__main__':
                     imgslist = [dimg]
 
                     if face.label != 'Unknown':
+
+                        new_ready_path = new_img_dir_path / face.label / f'{i}.jpg'
+                        new_ready_path.parent.mkdir(exist_ok=True, parents=True)
+                        new_ready_orig_path = new_img_dir_path / 'original' / f'{i}.jpg'
+                        new_ready_orig_path.parent.mkdir(exist_ok=True, parents=True)
+                        cv2.imwrite(str(new_ready_orig_path), img)
+
                         etalon_path = df_persons.loc[unknown.label, 'path']
                         etalon = cv2.imread(str(etalon_path))
                         imgslist.append(etalon)
 
-                    max_h = max([i.shape[0] for i in imgslist])
-                    left, right = 1, 1
-                    for idx, i in enumerate(imgslist):
-                        curr_h = i.shape[0]
-                        top_curr = int((max_h - curr_h) / 2)
-                        bottom_curr = max_h - curr_h - top_curr
-                        imgslist[idx] = cv2.copyMakeBorder(i, top_curr, bottom_curr, left, right, cv2.BORDER_CONSTANT)
+                        max_h = max([i.shape[0] for i in imgslist])
+                        left, right = 1, 1
+                        for idx, i in enumerate(imgslist):
+                            curr_h = i.shape[0]
+                            top_curr = int((max_h - curr_h) / 2)
+                            bottom_curr = max_h - curr_h - top_curr
+                            imgslist[idx] = cv2.copyMakeBorder(i, top_curr, bottom_curr, left, right,
+                                                               cv2.BORDER_CONSTANT)
 
-                    vis = np.concatenate(imgslist, axis=1)
-                    cv2.imwrite(str(new_ready_path), vis)
+                        vis = np.concatenate(imgslist, axis=1)
+                        cv2.imwrite(str(new_ready_path), vis)
 
-                    if face.label != 'Unknown':
-                        print(new_ready_path)
-                        exit()
+                        print('\n', new_ready_path, face.rec_score)
