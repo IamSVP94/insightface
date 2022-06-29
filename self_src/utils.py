@@ -439,9 +439,6 @@ class RetinaDetector(FaceAnalysis):
             bbox = bboxes[i, 0:4]
             xmin, ymin, xmax, ymax = bbox
             if min_face_size is not None:
-                print()
-                print(xmax - xmin, min_face_size[0])
-                print(ymax - ymin, min_face_size[1])
                 if (xmax - xmin < min_face_size[0]) or (ymax - ymin < min_face_size[1]):
                     continue
             det_score = bboxes[i, 4]
