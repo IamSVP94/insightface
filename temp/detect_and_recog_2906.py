@@ -43,7 +43,7 @@ if __name__ == '__main__':
                              use_roi=(30, 10, 20, 28),
                              min_face_size=(112, 112),
                              )
-        img = detector.plot_roi(img)
+        img = detector.plot_roi(img, thickness=2)
 
         whoes = []
         for face_idx, face in enumerate(faces):
@@ -59,13 +59,13 @@ if __name__ == '__main__':
 
             face.brightness = unknown.brightness
             face.label = unknown.label
-            face.rec_score = near_dist
             face.color = unknown.color
+            face.turn = unknown.turn
+            face.rec_score = near_dist
 
             whoes.append((face.label, round(face.rec_score, 4), face.color))
 
         if len(faces) == len(whoes) and len(faces):
-            print(len(faces), len(whoes))
             dimg = detector.draw_on(img, faces, whoes=whoes, show_kps=True, show=False)
 
             cv2.imwrite(str(new_output_dir_path / f'{img_path.name}'), dimg)

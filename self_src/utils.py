@@ -456,6 +456,20 @@ class RetinaDetector(FaceAnalysis):
         return ret
 
     def draw_on(self, img, faces, show_kps=False, whoes=None, show=False):
+        def _cv2_add_title(img, title, filled=True, font=cv2.FONT_HERSHEY_COMPLEX, font_scale=0.7, thickness=2):
+            img = img.copy()
+            text_pos_x, text_pos_y = box[0] - 1, box[1] - 4
+            if filled:
+                (text_h, text_w), _ = cv2.getTextSize(title, font, font_scale, thickness)
+                cv2.rectangle(img,
+                              (text_pos_x, text_pos_y - text_w - 1),
+                              (text_pos_x + text_h, text_pos_y + 4),
+                              color, -1)
+                cv2.putText(img, title, (text_pos_x, text_pos_y), font, font_scale, (255, 255, 255), thickness)
+            else:
+                cv2.putText(img, title, (text_pos_x, text_pos_y), font, font_scale, color, thickness)
+            return img
+
         dimg = img.copy()
         for i in range(len(faces)):
             face = faces[i]
@@ -472,8 +486,9 @@ class RetinaDetector(FaceAnalysis):
             if whoes:
                 label = whoes[i][0]
                 recog_dist = whoes[i][1]
-                cv2.putText(dimg, f'"{label}", {recog_dist} brightness={face.brightness}',
-                            (box[0] - 1, box[1] - 4), cv2.FONT_HERSHEY_COMPLEX, 0.7, color, 1)
+
+                title = f'"{label}", {recog_dist} brightness={face.brightness}, turn="{face.turn}"'
+                dimg = _cv2_add_title(dimg, title)
         if show:
             # dimg = cv2.cvtColor(dimg, cv2.COLOR_BGR2RGB)
             # plt.imshow(dimg)
@@ -635,7 +650,6 @@ class Person:
             good_frame = np.argmax(selector_out)  # bad = 0, good = 1
             if good_frame == 0:  # if "bad"
                 self.turn = 'badcenter'
-            print('self.turn =', self.turn, selector_out, good_frame)
         if dists[who] < threshold and self.turn == 'center':
             self.label = persons[who].label
             self.color = persons[who].color
