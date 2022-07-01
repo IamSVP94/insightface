@@ -398,7 +398,6 @@ class RetinaDetector(FaceAnalysis):
             top_proc, bottom_proc = 0, 0
         if left_proc + right_proc >= 100:
             left_proc, right_proc = 0, 0
-
         x_min = max(0, int(orig_h / 100 * top_proc))  # for correct crop
         x_max = min(orig_h, int(orig_h / 100 * (100 - bottom_proc)))  # for correct crop
         y_min = max(0, int(orig_w / 100 * left_proc))  # for correct crop
@@ -426,32 +425,48 @@ class RetinaDetector(FaceAnalysis):
         return img_with_roi
 
     def get(self, img, max_num=0, change_kpss_for_crop=True, use_roi=None, min_face_size=None):
-        if use_roi is not None:
-            img = self._get_roi(img, show=False,
-                                top_proc=use_roi[0], bottom_proc=use_roi[1],
-                                left_proc=use_roi[2], right_proc=use_roi[3],
-                                )
+        # if use_roi is not None:
+        #     img = self._get_roi(img, show=False,
+        #                         top_proc=use_roi[0], bottom_proc=use_roi[1],
+        #                         left_proc=use_roi[2], right_proc=use_roi[3],
+        #                         )
         bboxes, kpss = self.det_model.detect(img, max_num=max_num, metric='default')
         if bboxes.shape[0] == 0:
             return []
         ret = []
         for i in range(bboxes.shape[0]):
             bbox = bboxes[i, 0:4]
-            xmin, ymin, xmax, ymax = bbox
+            xmin_box, ymin_box, xmax_box, ymax_box = bbox
             if min_face_size is not None:
-                if (xmax - xmin < min_face_size[0]) or (ymax - ymin < min_face_size[1]):
+                if (xmax_box - xmin_box < min_face_size[0]) or (ymax_box - ymin_box < min_face_size[1]):
                     continue
             det_score = bboxes[i, 4]
             kps = None
             if kpss is not None:
                 kps = kpss[i]
             if change_kpss_for_crop:
-                kps = np.array([[k[0] - xmin, k[1] - ymin] for k in kps])
+                kps = np.array([[k[0] - xmin_box, k[1] - ymin_box] for k in kps])
             face = Face(bbox=bbox, kps=kps, det_score=det_score)
             for taskname, model in self.models.items():
                 if taskname == 'detection':
                     continue
                 model.get(img, face)
+            # TODO: add roi here (if box inside roi)
+            if use_roi is not None:
+                top_proc, bottom_proc, left_proc, right_proc = use_roi
+                bbox_centroid_x, bbox_centroid_y = (xmin_box + xmax_box) / 2, (ymin_box + ymax_box) / 2
+                orig_h, orig_w, _ = img.shape
+                if top_proc + bottom_proc >= 100:
+                    top_proc, bottom_proc = 0, 0
+                if left_proc + right_proc >= 100:
+                    left_proc, right_proc = 0, 0
+                x_min_roi = max(0, int(orig_h / 100 * top_proc))  # for correct crop
+                x_max_roi = min(orig_h, int(orig_h / 100 * (100 - bottom_proc)))  # for correct crop
+                y_min_roi = max(0, int(orig_w / 100 * left_proc))  # for correct crop
+                y_max_roi = min(orig_w, int(orig_w / 100 * (100 - right_proc)))  # for correct crop
+
+                if not x_min_roi <= bbox_centroid_x <= x_max_roi or not y_min_roi <= bbox_centroid_y <= y_max_roi:
+                    continue  # centroid not in roi
             ret.append(face)
         return ret
 
@@ -484,10 +499,8 @@ class RetinaDetector(FaceAnalysis):
                         color_kps = (0, 255, 0)
                     cv2.circle(dimg, (kps[l][0], kps[l][1]), 1, color_kps, 1)
             if whoes:
-                label = whoes[i][0]
-                recog_dist = whoes[i][1]
-
-                title = f'"{label}", {recog_dist} brightness={face.brightness}, turn="{face.turn}"'
+                # title = f'"{face.label}", {face.rec_score} brightness={face.brightness}, turn="{face.turn}" size='
+                title = f'"{face.label}", {face.rec_score} size={face.size}, turn="{face.turn}"'
                 dimg = _cv2_add_title(dimg, title)
         if show:
             # dimg = cv2.cvtColor(dimg, cv2.COLOR_BGR2RGB)
@@ -606,7 +619,9 @@ class Person:
             box = face.bbox.astype(np.int32)
             self.kps = face.kps
             img = img[box[1]:box[3], box[0]:box[2]]
+            print(align, self.kps, box)
             if align and self.kps is not None and box is not None:
+                print('align')
                 img, self.kps = alignment_procedure(self._full_img, box=box, landmark=self.kps)
                 # img, self.kps = alignment_procedure_old(img, landmark=self.kps)
         if change_brightness:
@@ -754,23 +769,6 @@ def get_imgs_thispersondoesnotexist(n=1, colors='RGB', show=False):
     return imgs
 
 
-def get_ROI_old(img, x_min, y_min, x_max, y_max, show=True):
-    orig_h, orig_w, _ = img.shape
-    x_min, x_max = max(0, x_min), min(orig_h, x_max)  # for correct crop
-    y_min, y_max = max(0, y_min), min(orig_w, y_max)  # for correct crop
-
-    img_roi = img[x_min:x_max, y_min:y_max]
-    if show:
-        img_roi_orig_size = cv2.copyMakeBorder(src=img_roi, borderType=cv2.BORDER_CONSTANT,
-                                               top=x_min, bottom=orig_h - x_max,
-                                               left=y_min, right=orig_w - y_max)
-        vis = np.concatenate((img, img_roi_orig_size), axis=0)
-        plt.imshow(vis)
-        plt.title(f'get_ROI\nx_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}')
-        plt.show()
-    return img_roi
-
-
 def get_ROI(img, top_proc, bottom_proc, left_proc, right_proc, show=False):
     print(img.shape)
     orig_h, orig_w, _ = img.shape
@@ -778,7 +776,6 @@ def get_ROI(img, top_proc, bottom_proc, left_proc, right_proc, show=False):
         top_proc, bottom_proc = 0, 0
     if left_proc + right_proc >= 100:
         left_proc, right_proc = 0, 0
-
     x_min = max(0, int(orig_h / 100 * top_proc))  # for correct crop
     x_max = min(orig_h, int(orig_h / 100 * (100 - bottom_proc)))  # for correct crop
     y_min = max(0, int(orig_w / 100 * left_proc))  # for correct crop
