@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 import random
 import math
 import onnxruntime as ort
+import matplotlib as mpl
+
+mpl.rcParams['figure.dpi'] = 200  # plot quality in PyCharm
+mpl.rcParams['figure.subplot.left'] = 0.01
+mpl.rcParams['figure.subplot.right'] = 1
 
 PARENT_DIR = Path('/home/vid/hdd/projects/PycharmProjects/insightface/')
 bright_etalon = 150  # constant 150
@@ -36,6 +41,8 @@ class RetinaDetector(FaceAnalysis):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.use_roi = False
+        self.color = (0, 255, 0)
+        self.thickness = 1
 
     def get(self, img, max_num=0, use_roi=None, min_face_size=None):
         bboxes, kpss = self.det_model.detect(img, max_num=max_num, metric='default')
@@ -61,7 +68,7 @@ class RetinaDetector(FaceAnalysis):
                 model.get(img, face)  # here make emb TODO: add brightnes
 
             if use_roi is not None:
-                self.use_roi = True
+                self.use_roi = True  # for correct plot_roi
                 top_proc, bottom_proc, left_proc, right_proc = use_roi
                 bbox_centroid_y, bbox_centroid_x = (xmin_box + xmax_box) / 2, (ymin_box + ymax_box) / 2
                 orig_h, orig_w, _ = img.shape
@@ -80,6 +87,47 @@ class RetinaDetector(FaceAnalysis):
             ret.append(face)
         return ret
 
+    def draw_on(self, img, faces, show_kps=False, plot_roi=False, plot_crop_face=False, plot_etalon=False, show=False):
+        def _cv2_add_title(img, title, filled=True, font=cv2.FONT_HERSHEY_COMPLEX, font_scale=0.7, thickness=2):
+            img = img.copy()
+            text_pos_x, text_pos_y = box[0] - 1, box[1] - 4
+            if filled:
+                (text_h, text_w), _ = cv2.getTextSize(title, font, font_scale, thickness)
+                cv2.rectangle(img,
+                              (text_pos_x, text_pos_y - text_w - 1),
+                              (text_pos_x + text_h, text_pos_y + 4),
+                              color, -1)
+                cv2.putText(img, title, (text_pos_x, text_pos_y), font, font_scale, (255, 255, 255), thickness)
+            else:
+                cv2.putText(img, title, (text_pos_x, text_pos_y), font, font_scale, color, thickness)
+            return img
+
+        dimg = img.copy()
+        if plot_roi and self.use_roi:
+            dimg = cv2.rectangle(img.copy(),
+                                 (self.roi_points['y_min'], self.roi_points['x_min']),
+                                 (self.roi_points['y_max'], self.roi_points['x_max']),
+                                 self.color, self.thickness)
+        for i in range(len(faces)):
+            face = faces[i]
+            box = face.bbox.astype(np.int)  # xmin, ymin, xmax, ymax
+            face.size = [box[2] - box[0], box[3] - box[1]]
+            color = face['color'] if face.get('color') else (0, 255, 0)
+            cv2.rectangle(dimg, (box[0], box[1]), (box[2], box[3]), color, 1)
+            if show_kps and face.kps is not None:
+                kps = face.kps.astype(np.int32)
+                for l in range(kps.shape[0]):
+                    color_kps = (0, 0, 255)
+                    if l == 0 or l == 3:
+                        color_kps = (0, 255, 0)
+                    cv2.circle(dimg, (kps[l][0], kps[l][1]), 1, color_kps, 1)
+            title = f'"{face.label}", {face.rec_score} size={face.size}'
+            dimg = _cv2_add_title(dimg, title)
+        if show:
+            plt.imshow(dimg)
+            plt.show()
+        return dimg
+
 
 detector = RetinaDetector(
     providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
@@ -97,7 +145,7 @@ recognator.prepare(ctx_id=0)
 
 
 class Person2:
-    def __init__(self, path=None, full_img=None, face=None, embedding=None, label='Unknown', color=(0, 0, 255),
+    def __init__(self, path=None, full_img=None, face=None, embedding=None, label='Unknown', color=(255, 0, 0),
                  change_brightness=True, show=False):
         self.color = color
         self.label = label
@@ -116,6 +164,24 @@ class Person2:
             embedding = recognator.get(self.crop_face)
         self.embedding = embedding
         self.face = face
+
+    def get_label(self, persons, threshold=0.7, metric='cosine',
+                  turnmetric=turnmetric, face=None, use_nn=False,
+                  show=False):
+        dists = []
+        for person in persons:
+            dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
+            dists.append(dist)
+        who = np.argmin(dists)
+        min_dist = round(dists[who], 5)
+        if dists[who] < threshold:
+            self.label = persons[who].label
+            self.color = persons[who].color
+        if show:
+            plt.imshow(self.crop_face)
+            plt.title(f'"{self.label}": score={min_dist} (treshold={threshold})')
+            plt.show()
+        return min_dist
 
 
 def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
@@ -148,3 +214,19 @@ def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_fo
         # plt.title(f'nose inside face = {inside}')
         plt.show()
     return warped, landmark
+
+
+def get_random_color():
+    randomcolor = (random.randint(50, 200), random.randint(50, 200), random.randint(0, 150))
+    return randomcolor
+
+
+def persons_list_from_csv(df_path):
+    df_persons = pd.read_csv(df_path, index_col=0)
+    persons = []
+    for label, line in df_persons.iterrows():
+        img_path = line[0]
+        emb = np.array([line.to_list()[1:]])
+        person = Person2(path=img_path, label=label, color=get_random_color(), embedding=emb)
+        persons.append(person)
+    return persons
