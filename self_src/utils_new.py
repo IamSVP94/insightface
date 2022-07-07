@@ -253,3 +253,20 @@ def persons_list_from_csv(df_path):
         person = Person2(path=img_path, label=label, color=get_random_color(), embedding=emb)
         persons.append(person)
     return persons
+
+
+def get_imgs_thispersondoesnotexist(n=1, colors='RGB', show=False):
+    imgs = []
+    for i in range(n):
+        img_str = requests.get('https://www.thispersondoesnotexist.com/image?').content
+        nparr = np.frombuffer(img_str, dtype=np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if colors == 'RGB':
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if show:
+            if colors != 'RGB':
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            plt.imshow(img)
+            plt.show()
+        imgs.append(img)
+    return imgs
