@@ -5,16 +5,13 @@ from tqdm import tqdm
 from pathlib import Path
 from self_src.utils_new import detector, PARENT_DIR, Person2, persons_list_from_csv
 
-recog_tresh = 10.4
+recog_tresh = 0.6
 
-# new_output_dir_path = PARENT_DIR / 'temp' / f'without_0707_office_recog_tresh={recog_tresh}'
-new_output_dir_path = PARENT_DIR / 'temp' / f'all_0707_recog_tresh={recog_tresh}'
+new_output_dir_path = PARENT_DIR / 'temp' / f'small_0707_recog_tresh={recog_tresh}'
 new_output_dir_path.mkdir(exist_ok=True, parents=True)
 print(f'save to {new_output_dir_path}')
 
-# all_persons = persons_list_from_csv(PARENT_DIR / 'temp/n=834_native_without_employee.csv')
-all_persons = persons_list_from_csv(PARENT_DIR / 'temp/n=849_native.csv')
-
+all_persons = persons_list_from_csv(PARENT_DIR / 'temp/n=913_native.csv')
 min_score = 999
 min_score_img_name = ''
 if __name__ == '__main__':
@@ -42,7 +39,7 @@ if __name__ == '__main__':
         img = cv2.cvtColor(cv2.imread(str(img_path)), cv2.COLOR_BGR2RGB)
         label = img_path.parts[-2]
         faces = detector.get(img=img,
-                             use_roi=(30, 10, 20, 28),
+                             use_roi=(30, 10, 20, 25),
                              min_face_size=(112, 112),
                              )
         if len(faces) == 0:  # need work only with face
@@ -53,17 +50,31 @@ if __name__ == '__main__':
 
             # face.brightness = unknown.brightness
             # face.turn = unknown.turn
+            face.crop_face = unknown.crop_face
             face.label = unknown.label
             face.color = unknown.color
+            face.etalon_path = unknown.etalon_path
             face.rec_score = near_dist
             if face.rec_score < min_score:
                 min_score = face.rec_score
                 min_score_img_name = img_path
 
-        dimg = detector.draw_on(img, faces, plot_roi=True, show=False)
+        dimg = detector.draw_on(img, faces, plot_roi=True, plot_crop_face=True, plot_etalon=True, show=False)
         # cv2.imwrite(str(new_output_dir_path / f'{img_path.name}'), cv2.cvtColor(dimg, cv2.COLOR_RGB2BGR))
 
-        new_suffix = f'{[face.label for face in faces]}.jpg'
-        cv2.imwrite(str(new_output_dir_path / f'{img_path.stem}_{new_suffix}'), cv2.cvtColor(dimg, cv2.COLOR_RGB2BGR))
+        save = True
+        # for face in faces:
+        #     if face.label not in ['Alena', 'VladislavV', 'Sergey_M', 'Evgeniy', 'Andrey',
+        #                           'Dmitryi', 'Vladislav', 'Denis', 'Anton', 'Farid',
+        #                           'Dmitryi_Base', 'Victor', 'Sergei', 'Alexandr', 'Anna',
+        #                           'Unknown',
+        #                           ]:
+        #         save = True
+        #         break
+        #
+        if save:
+            new_suffix = f'{[face.label for face in faces]}.jpg'
+            new_path = new_output_dir_path / f'{img_path.stem}_{new_suffix}'
+            cv2.imwrite(str(new_path), cv2.cvtColor(dimg, cv2.COLOR_BGR2RGB))
 
     print(min_score, min_score_img_name)

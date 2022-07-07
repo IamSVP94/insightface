@@ -6,17 +6,14 @@ from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 from insightface.model_zoo import ArcFaceONNX
 from insightface.model_zoo.model_zoo import PickableInferenceSession
-from insightface.utils import face_align
-from insightface.utils.face_align import norm_crop, estimate_norm
+from insightface.utils.face_align import estimate_norm
 from scipy.spatial.distance import cdist
 from pathlib import Path
 import matplotlib.pyplot as plt
 import random
-import math
-import onnxruntime as ort
 import matplotlib as mpl
 
-mpl.rcParams['figure.dpi'] = 200  # plot quality in PyCharm
+mpl.rcParams['figure.dpi'] = 200  # plot quality
 mpl.rcParams['figure.subplot.left'] = 0.01
 mpl.rcParams['figure.subplot.right'] = 1
 
@@ -51,7 +48,6 @@ class RetinaDetector(FaceAnalysis):
         ret = []
         for i in range(bboxes.shape[0]):
             bbox = bboxes[i, 0:4]
-
             xmin_box, ymin_box, xmax_box, ymax_box = bbox
             if min_face_size is not None:
                 if (xmax_box - xmin_box < min_face_size[0]) or (ymax_box - ymin_box < min_face_size[1]):
@@ -87,7 +83,7 @@ class RetinaDetector(FaceAnalysis):
             ret.append(face)
         return ret
 
-    def draw_on(self, img, faces, show_kps=False, plot_roi=False, plot_crop_face=False, plot_etalon=False, show=False):
+    def draw_on(self, img, faces, plot_roi=False, plot_crop_face=False, plot_etalon=False, show=False):
         def _cv2_add_title(img, title, filled=True, font=cv2.FONT_HERSHEY_COMPLEX, font_scale=0.7, thickness=2):
             img = img.copy()
             text_pos_x, text_pos_y = box[0] - 1, box[1] - 4
@@ -114,19 +110,44 @@ class RetinaDetector(FaceAnalysis):
             face.size = [box[2] - box[0], box[3] - box[1]]
             color = face['color'] if face.get('color') else (0, 255, 0)
             cv2.rectangle(dimg, (box[0], box[1]), (box[2], box[3]), color, 1)
-            if show_kps and face.kps is not None:
-                kps = face.kps.astype(np.int32)
-                for l in range(kps.shape[0]):
-                    color_kps = (0, 0, 255)
-                    if l == 0 or l == 3:
-                        color_kps = (0, 255, 0)
-                    cv2.circle(dimg, (kps[l][0], kps[l][1]), 1, color_kps, 1)
-            title = f'"{face.label}", {face.rec_score} size={face.size}'
+            title = f'"{face.label}", ({round(float(face.det_score), 4)}, {round(float(face.rec_score), 4)}) size={face.size}'
             dimg = _cv2_add_title(dimg, title)
+        if plot_crop_face:
+            crops = [face.crop_face for face in faces]
+            crops_together = self._get_coll_imgs(crops, dimg.shape)
+            dimg = np.concatenate([dimg, crops_together], axis=1)
+
+        if plot_etalon:
+            etalon_pathes = [face.etalon_path for face in faces]
+            etalons = []
+            for etalon_path in etalon_pathes:
+                if etalon_path is not None:
+                    etalon = cv2.cvtColor(cv2.imread(str(etalon_path)), cv2.COLOR_BGR2RGB)
+                else:
+                    etalon = np.full(shape=(112, 112, 3), fill_value=(255, 0, 0), dtype=np.uint8)  # empties
+                etalons.append(etalon)
+            etalons_together = self._get_coll_imgs(etalons, dimg.shape)
+            dimg = np.concatenate([dimg, etalons_together], axis=1)
         if show:
             plt.imshow(dimg)
             plt.show()
         return dimg
+
+    def _get_coll_imgs(self, imgs_list, size, top=10, left=5, right=5):
+        max_w = max([i.shape[1] for i in imgs_list])
+        top_one, bottom_one = 1, 1
+        good_size_ready = []
+        for i in imgs_list:
+            curr_w = i.shape[1]
+            left = int((max_w - curr_w) / 2)
+            right = max_w - curr_w - left
+            vis_part_img = cv2.copyMakeBorder(i, top_one, bottom_one, left, right, cv2.BORDER_CONSTANT)
+            good_size_ready.append(vis_part_img)
+        ready_together = np.concatenate(good_size_ready, axis=0)
+
+        bottom = size[0] - ready_together.shape[0] - top
+        ready_together = cv2.copyMakeBorder(ready_together, top, bottom, left, right, cv2.BORDER_CONSTANT)
+        return ready_together
 
 
 detector = RetinaDetector(
@@ -149,12 +170,12 @@ class Person2:
                  change_brightness=True, show=False):
         self.color = color
         self.label = label
-        if full_img is not None:
-            self.full_img = full_img
-        elif path is not None:
-            self.full_img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
-
+        self.path = path
         if embedding is None:
+            if full_img is not None:
+                self.full_img = full_img
+            elif self.path is not None:
+                self.full_img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
             if face is None:
                 face = detector.get(img=self.full_img,
                                     # use_roi=(30, 10, 20, 28),  # how to change?
@@ -174,9 +195,11 @@ class Person2:
             dists.append(dist)
         who = np.argmin(dists)
         min_dist = round(dists[who], 5)
+        self.etalon_path = persons[who].path
         if dists[who] < threshold:
             self.label = persons[who].label
             self.color = persons[who].color
+            # self.etalon_path = persons[who].path
         if show:
             plt.imshow(self.crop_face)
             plt.title(f'"{self.label}": score={min_dist} (treshold={threshold})')
