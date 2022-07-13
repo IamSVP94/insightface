@@ -21,6 +21,8 @@ PARENT_DIR = Path('/home/vid/hdd/projects/PycharmProjects/insightface/')
 bright_etalon = 150  # constant 150
 turnmetric = 20  # constant 20
 
+landmarks_colors = [(0, 255, 0), (255, 0, 255), (255, 255, 255), (0, 255, 0), (255, 0, 255)]
+
 
 class ArcFaceONNXVL(ArcFaceONNX):
     def __init__(self, *args, **kwargs):
@@ -110,10 +112,17 @@ class RetinaDetector(FaceAnalysis):
             face.size = [box[2] - box[0], box[3] - box[1]]
             color = face['color'] if face.get('color') else (0, 255, 0)
             cv2.rectangle(dimg, (box[0], box[1]), (box[2], box[3]), color, 1)
-            title = f'"{face.label}", ({round(float(face.det_score), 4)}, {round(float(face.rec_score), 4)}) size={face.size}'
+            title = f'"{face.label}", ({round(float(face.det_score), 4)}, {round(float(face.rec_score), 4)}) turn={face.turn}, size={face.size}'
             dimg = _cv2_add_title(dimg, title)
         if plot_crop_face:
             crops = [face.crop_face for face in faces]
+
+            # draw landmarsks on crops
+            for crop_idx, crop in enumerate(crops):
+                for idx_p, p in enumerate(faces[crop_idx].kps):
+                    cv2.circle(crop, p, 1, landmarks_colors[idx_p], 1)
+            # /draw landmarsks on crops
+
             crops_together = self._get_coll_imgs(crops, dimg.shape)
             dimg = np.concatenate([dimg, crops_together], axis=1)
 
@@ -133,7 +142,7 @@ class RetinaDetector(FaceAnalysis):
             plt.show()
         return dimg
 
-    def _get_coll_imgs(self, imgs_list, size, top=10, left=5, right=5):
+    def _get_coll_imgs(self, imgs_list, size, top=1, left=1, right=1):  # top=10, left=5, right=5
         max_w = max([i.shape[1] for i in imgs_list])
         top_one, bottom_one = 1, 1
         good_size_ready = []
@@ -171,18 +180,18 @@ class Person2:
         self.color = color
         self.label = label
         self.path = path
+        if full_img is not None:
+            self.full_img = full_img
+        if self.path is not None and full_img is None:
+            self.full_img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
         if embedding is None:
-            if full_img is not None:
-                self.full_img = full_img
-            elif self.path is not None:
-                self.full_img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
             if face is None:
                 face = detector.get(img=self.full_img,
                                     # use_roi=(30, 10, 20, 28),  # how to change?
-                                    min_face_size=(112, 112),  # how to change?
+                                    # min_face_size=(112, 112),  # how to change?
                                     )[0]
-            self.crop_face, face.kps = norm_crop_self(full_img, face.kps, show=False)
-            embedding = recognator.get(self.crop_face)
+            self.crop_face, face.kps, self.turn = norm_crop_self(full_img, face.kps, show=False)
+            embedding = recognator.get(self.crop_face, show=False)
         self.embedding = embedding
         self.face = face
 
@@ -196,18 +205,24 @@ class Person2:
         who = np.argmin(dists)
         min_dist = round(dists[who], 5)
         self.etalon_path = persons[who].path
-        if dists[who] < threshold:
+        if dists[who] < threshold and self.turn >= 0:
             self.label = persons[who].label
             self.color = persons[who].color
             # self.etalon_path = persons[who].path
         if show:
             plt.imshow(self.crop_face)
-            plt.title(f'"{self.label}": score={min_dist} (treshold={threshold})')
+            plt.title(f'"{self.label}": turn={self.turn} score={min_dist} (treshold={threshold})')
             plt.show()
         return min_dist
 
 
 def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
+    def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
+        inside = cv2.pointPolygonTest(countur.astype(np.float32),
+                                      pt.astype(np.float32),
+                                      measureDist=True)
+        return round(inside + bias, 2)  # positive (inside), negative (outside), or zero (on an edge) value
+
     # TODO: add brightness
     M, pose_index = estimate_norm(landmark, image_size, mode)
     warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
@@ -217,26 +232,25 @@ def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_fo
                 M[0][0] * point[0] + M[0][1] * point[1] + M[0][2],  # change Ox
                 M[1][0] * point[0] + M[1][1] * point[1] + M[1][2]  # change Oy
             ], landmark)))  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
-    landmark = landmark.astype(int)
+    landmark = landmark.astype(np.uint8)
+    without_nose = np.array([landmark[1], landmark[4], landmark[3], landmark[0]])
+    nose_inside = _get_nose_inside(without_nose, landmark[2], bias=0)
     if show:
         cimg = warped.copy()
-        colors = [(0, 255, 0), (255, 255, 0), (255, 0, 0), (0, 255, 0), (255, 255, 0)]
         for idx_p, p in enumerate(landmark):
-            cv2.circle(cimg, p, 1, colors[idx_p], 1)
+            cv2.circle(cimg, p, 1, landmarks_colors[idx_p], 1)
 
-        src = np.zeros(cimg.shape)
-        cv2.line(src, landmark[0], landmark[1], (255, 255, 255), 1)
-        cv2.line(src, landmark[1], landmark[4], (255, 255, 255), 1)
-        cv2.line(src, landmark[3], landmark[4], (255, 255, 255), 1)
-        cv2.line(src, landmark[0], landmark[3], (255, 255, 255), 1)
-        cv2.circle(src, landmark[2], 1, (255, 255, 255), 1)
+        src = np.zeros(cimg.shape).astype(np.uint8)
+        nose_color = (0, 255, 0) if nose_inside >= 0 else (255, 0, 0)
+
+        cv2.polylines(src, np.int32([without_nose]), True, 255, 1)
+        cv2.circle(src, landmark[2], 1, nose_color, 1)
 
         concat = np.concatenate((cimg, src.astype(int)), axis=1)
         plt.imshow(concat)
-        # TODO: add determiner if nose inside face
-        # plt.title(f'nose inside face = {inside}')
+        plt.title(f'"{nose_inside}" nose_inside face')
         plt.show()
-    return warped, landmark
+    return warped, landmark, nose_inside
 
 
 def get_random_color():
