@@ -195,7 +195,7 @@ class Person2:
         self.embedding = embedding
         self.face = face
 
-    def get_label(self, persons, threshold=0.7, metric='cosine',
+    def get_label(self, persons, threshold=0.7, metric='cosine', turn_bias=0,
                   turnmetric=turnmetric, face=None, use_nn=False,
                   show=False):
         dists = []
@@ -205,7 +205,7 @@ class Person2:
         who = np.argmin(dists)
         min_dist = round(dists[who], 5)
         self.etalon_path = persons[who].path
-        if dists[who] < threshold and self.turn >= 0:
+        if dists[who] < threshold and self.turn + turn_bias >= 0:
             self.label = persons[who].label
             self.color = persons[who].color
             # self.etalon_path = persons[who].path
