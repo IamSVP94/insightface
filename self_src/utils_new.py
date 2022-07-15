@@ -12,6 +12,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import random
 import matplotlib as mpl
+import onnxruntime as ort
 
 mpl.rcParams['figure.dpi'] = 200  # plot quality
 mpl.rcParams['figure.subplot.left'] = 0.01
@@ -19,7 +20,6 @@ mpl.rcParams['figure.subplot.right'] = 1
 
 PARENT_DIR = Path('/home/vid/hdd/projects/PycharmProjects/insightface/')
 bright_etalon = 150  # constant 150
-turnmetric = 20  # constant 20
 
 landmarks_colors = [(0, 255, 0), (255, 0, 255), (255, 255, 255), (0, 255, 0), (255, 0, 255)]
 
@@ -165,7 +165,7 @@ detector = RetinaDetector(
     allowed_modules=['detection'],  # because need custom recognition module
     det_name='retinaface_mnet025_v2', rec_name='arcface_r100_v1',
 )
-detector.prepare(ctx_id=0, det_thresh=0.5)  # 0.5
+detector.prepare(ctx_id=0, det_thresh=0.7)  # 0.5
 
 session = PickableInferenceSession(
     model_path=str(PARENT_DIR / 'models/IResNet100l.onnx'),
@@ -173,10 +173,14 @@ session = PickableInferenceSession(
 recognator = ArcFaceONNXVL(model_file=PARENT_DIR / 'models/IResNet100l.onnx', session=session)
 recognator.prepare(ctx_id=0)
 
+frame_selector_model_path = '/home/vid/hdd/projects/PycharmProjects/insightface/models/ConvNext_selector.onnx'
+frame_selector_model = ort.InferenceSession(frame_selector_model_path, providers=['CUDAExecutionProvider'])
+frame_selector_model_input_name = frame_selector_model.get_inputs()[0].name
+
 
 class Person2:
     def __init__(self, path=None, full_img=None, face=None, embedding=None, label='Unknown', color=(255, 0, 0),
-                 change_brightness=True, show=False):
+                 change_brightness=False, show=False):
         self.color = color
         self.label = label
         self.path = path
@@ -188,16 +192,23 @@ class Person2:
             if face is None:
                 face = detector.get(img=self.full_img,
                                     # use_roi=(30, 10, 20, 28),  # how to change?
-                                    # min_face_size=(112, 112),  # how to change?
+                                    min_face_size=(50, 50),  # how to change?
                                     )[0]
-            self.crop_face, face.kps, self.turn = norm_crop_self(full_img, face.kps, show=False)
-            embedding = recognator.get(self.crop_face, show=False)
+            crop_face, face.kps, self.turn = norm_crop_self(full_img, face.kps, show=show)
+            if change_brightness:
+                self.crop_face = brightness_changer(crop_face, etalon=bright_etalon)
+            else:
+                self.crop_face = crop_face
+
+            embedding = recognator.get(self.crop_face, show=show)
         self.embedding = embedding
         self.face = face
 
-    def get_label(self, persons, threshold=0.7, metric='cosine', turn_bias=0,
-                  turnmetric=turnmetric, face=None, use_nn=False,
+    def get_label(self, persons,
+                  threshold=0.7, metric='cosine',
+                  turn_bias=0, use_nn=False, limits=None,
                   show=False):
+        # TODO: add nn bad img filter
         dists = []
         for person in persons:
             dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
@@ -205,6 +216,31 @@ class Person2:
         who = np.argmin(dists)
         min_dist = round(dists[who], 5)
         self.etalon_path = persons[who].path
+        if limits is not None and self.turn + turn_bias >= 0:
+            print(220, self.face.kps)
+
+            '''
+            get_middle = lambda p1, p2: [int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)]
+        m_right = get_middle(landmark[0], landmark[3])
+        m_lelf = get_middle(landmark[1], landmark[4])
+        m_eye = get_middle(landmark[0], landmark[1])
+        m_mouth = get_middle(landmark[3], landmark[4])
+
+        centroid_face = [int((m_eye[0] + m_mouth[0]) / 2), int((m_lelf[1] + m_right[1]) / 2)]
+
+        difX = int((m_lelf[0] - m_right[0]) / 100 * borderXp / 2)
+        difY = int((m_mouth[1] - m_eye[1]) / 100 * borderYp / 2)  # /2 for half
+        borderXp = (centroid_face[0] - difX, centroid_face[0] + difX)
+        borderYp = (centroid_face[1] - difY, centroid_face[1] + difY)
+            '''
+
+            pass
+        if use_nn and self.turn + turn_bias >= 0:
+            img_for_selector = preprocess_input(self.crop_face, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            selector_out = frame_selector_model.run(None, {frame_selector_model_input_name: img_for_selector})[0]
+            good_frame = np.argmax(selector_out)  # bad = 0, good = 1
+            if good_frame == 0:  # if "bad"
+                self.turn = -99
         if dists[who] < threshold and self.turn + turn_bias >= 0:
             self.label = persons[who].label
             self.color = persons[who].color
@@ -216,7 +252,7 @@ class Person2:
         return min_dist
 
 
-def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
+def norm_crop_self_old(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
     def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
         inside = cv2.pointPolygonTest(countur.astype(np.float32),
                                       pt.astype(np.float32),
@@ -247,6 +283,64 @@ def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_fo
         cv2.circle(src, landmark[2], 1, nose_color, 1)
 
         concat = np.concatenate((cimg, src.astype(int)), axis=1)
+        plt.imshow(concat)
+        plt.title(f'"{nose_inside}" nose_inside face')
+        plt.show()
+    return warped, landmark, nose_inside
+
+
+def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
+    borderXp, borderYp = 100, 75
+
+    def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
+        inside = cv2.pointPolygonTest(countur.astype(np.float32),
+                                      pt.astype(np.float32),
+                                      measureDist=True)
+        return round(inside + bias, 2)  # positive (inside), negative (outside), or zero (on an edge) value
+
+    # TODO: add brightness
+    M, pose_index = estimate_norm(landmark, image_size, mode)
+    warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
+    if change_kpss_for_crop:
+        landmark = np.array(list(map(
+            lambda point: [
+                M[0][0] * point[0] + M[0][1] * point[1] + M[0][2],  # change Ox
+                M[1][0] * point[0] + M[1][1] * point[1] + M[1][2]  # change Oy
+            ], landmark)))  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
+    landmark = landmark.astype(np.uint8)
+    eye_mouth_countur = np.array([landmark[1], landmark[4], landmark[3], landmark[0]])
+    nose_inside = _get_nose_inside(eye_mouth_countur, landmark[2], bias=0)
+    if show:
+        cimg = warped.copy()
+        for idx_p, p in enumerate(landmark):
+            cv2.circle(cimg, p, 1, landmarks_colors[idx_p], 1)
+
+        only_landmarsk = np.zeros(cimg.shape).astype(np.uint8)
+        nose_color = (0, 255, 0) if nose_inside >= 0 else (255, 0, 0)
+
+        get_middle = lambda p1, p2: [int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)]
+        m_right = get_middle(landmark[0], landmark[3])
+        m_lelf = get_middle(landmark[1], landmark[4])
+        m_eye = get_middle(landmark[0], landmark[1])
+        m_mouth = get_middle(landmark[3], landmark[4])
+
+        centroid_face = [int((m_eye[0] + m_mouth[0]) / 2), int((m_lelf[1] + m_right[1]) / 2)]
+
+        difX = int((m_lelf[0] - m_right[0]) / 100 * borderXp / 2)
+        difY = int((m_mouth[1] - m_eye[1]) / 100 * borderYp / 2)  # /2 for half
+        borderXp = (centroid_face[0] - difX, centroid_face[0] + difX)
+        borderYp = (centroid_face[1] - difY, centroid_face[1] + difY)
+
+        if nose_inside >= 0 and not (
+                borderXp[0] <= landmark[2][0] <= borderXp[1] and borderYp[0] <= landmark[2][1] <= borderYp[1]):
+            nose_color = (255, 255, 0)
+            nose_inside = -50
+
+        cv2.polylines(only_landmarsk, np.int32([eye_mouth_countur]), isClosed=True, color=(255, 255, 255), thickness=1)
+        cv2.circle(only_landmarsk, landmark[2], 1, nose_color, 1)
+        cv2.circle(only_landmarsk, centroid_face, 1, (255, 255, 255), 1)
+
+        concat = np.concatenate((cimg, only_landmarsk.astype(int)), axis=1)
         plt.imshow(concat)
         plt.title(f'"{nose_inside}" nose_inside face')
         plt.show()
@@ -284,3 +378,57 @@ def get_imgs_thispersondoesnotexist(n=1, colors='RGB', show=False):
             plt.show()
         imgs.append(img)
     return imgs
+
+
+def brightness_changer(img, etalon=None, diff=None, show=False):  # etalon=150
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    orig_br = int(np.mean(v))
+    if etalon:
+        value = etalon - orig_br
+        v = cv2.add(v, value)
+        v[v > 255] = 255
+        v[v < 0] = 0
+        hsv = cv2.merge((h, s, v))
+    if diff:
+        v = cv2.add(v, diff)
+        v[v > 255] = 255
+        v[v < 0] = 0
+        hsv = cv2.merge((h, s, v))
+    final_img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    if show:
+        vis = np.concatenate((img, final_img), axis=1)
+        plt.imshow(vis)
+        plt.title(f'before {orig_br}:after ~{etalon}')
+        plt.show()
+    return final_img
+
+
+def get_brightness(img):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    return int(np.mean(v))
+
+
+def preprocess_input(img, mean=None, std=None, input_space="RGB", size=(112, 112)):
+    max_pixel_value = 255.0
+    if input_space == "RGB":
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    resizeimg = cv2.resize(img, size)
+
+    img = resizeimg.astype(np.float32)
+    if mean is not None:
+        mean = np.array(mean, dtype=np.float32)
+        mean *= max_pixel_value
+        img -= mean
+
+    if std is not None:
+        std = np.array(std, dtype=np.float32)
+        std *= max_pixel_value
+
+        denominator = np.reciprocal(std, dtype=np.float32)
+        img *= denominator
+
+    img = np.moveaxis(img, -1, 0)
+    img = img[np.newaxis, :, :, :]
+    return img
