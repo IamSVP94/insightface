@@ -127,14 +127,16 @@ class RetinaDetector(FaceAnalysis):
             dimg = np.concatenate([dimg, crops_together], axis=1)
 
         if plot_etalon:
-            etalon_pathes = [face.etalon_path for face in faces]
             etalons = []
-            for etalon_path in etalon_pathes:
-                if etalon_path is not None:
-                    etalon = cv2.cvtColor(cv2.imread(str(etalon_path)), cv2.COLOR_BGR2RGB)
+            for face in faces:
+                if face.etalon_crop is not None:
+                    etalon = face.etalon_crop
+                elif face.etalon_path is not None:
+                    etalon = cv2.cvtColor(cv2.imread(str(face.etalon_path)), cv2.COLOR_BGR2RGB)
                 else:
-                    etalon = np.full(shape=(112, 112, 3), fill_value=(255, 0, 0), dtype=np.uint8)  # empties
+                    etalon = np.full(shape=(112, 112, 3), fill_value=face.color, dtype=np.uint8)  # empties
                 etalons.append(etalon)
+
             etalons_together = self._get_coll_imgs(etalons, dimg.shape)
             dimg = np.concatenate([dimg, etalons_together], axis=1)
         if show:
@@ -184,24 +186,23 @@ class Person2:
         self.color = color
         self.label = label
         self.path = path
+        self.crop_face = None
         if full_img is not None:
             self.full_img = full_img
         if self.path is not None and full_img is None:
             self.full_img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
         if embedding is None:
             if face is None:
-                face = detector.get(img=self.full_img,
+                face = detector.get(img=self.full_img, max_num=1,
                                     # use_roi=(30, 10, 20, 28),  # how to change?
                                     min_face_size=(50, 50),  # how to change?
                                     )[0]
-            crop_face, face.kps, self.turn = norm_crop_self(full_img, face.kps, show=show)
+            crop_face, face.kps, self.turn = norm_crop_self(self.full_img, face.kps, show=show)
             if change_brightness:
                 self.crop_face = brightness_changer(crop_face, etalon=bright_etalon)
             else:
                 self.crop_face = crop_face
-
-            embedding = recognator.get(self.crop_face, show=show)
-        self.embedding = embedding
+        self.embedding = embedding if embedding is not None else recognator.get(self.crop_face, show=show)
         self.face = face
 
     def get_label(self, persons,
@@ -216,25 +217,26 @@ class Person2:
         who = np.argmin(dists)
         min_dist = round(dists[who], 5)
         self.etalon_path = persons[who].path
+        self.etalon_crop = persons[who].crop_face
         if limits is not None and self.turn + turn_bias >= 0:
-            print(220, self.face.kps)
-
-            '''
             get_middle = lambda p1, p2: [int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)]
-        m_right = get_middle(landmark[0], landmark[3])
-        m_lelf = get_middle(landmark[1], landmark[4])
-        m_eye = get_middle(landmark[0], landmark[1])
-        m_mouth = get_middle(landmark[3], landmark[4])
+            m_right = get_middle(self.face.kps[0], self.face.kps[3])
+            m_lelf = get_middle(self.face.kps[1], self.face.kps[4])
+            m_eye = get_middle(self.face.kps[0], self.face.kps[1])
+            m_mouth = get_middle(self.face.kps[3], self.face.kps[4])
+            centroid_face = [int((m_eye[0] + m_mouth[0]) / 2), int((m_lelf[1] + m_right[1]) / 2)]
 
-        centroid_face = [int((m_eye[0] + m_mouth[0]) / 2), int((m_lelf[1] + m_right[1]) / 2)]
+            difX = int((m_lelf[0] - m_right[0]) / 100 * limits[0] / 2)
+            difY = int((m_mouth[1] - m_eye[1]) / 100 * limits[1] / 2)  # /2 for half
+            borders = dict()
+            borders['x'] = {'min': centroid_face[0] - difX, 'max': centroid_face[0] + difX}
+            borders['y'] = {'min': centroid_face[1] - difY, 'max': centroid_face[1] + difY}
 
-        difX = int((m_lelf[0] - m_right[0]) / 100 * borderXp / 2)
-        difY = int((m_mouth[1] - m_eye[1]) / 100 * borderYp / 2)  # /2 for half
-        borderXp = (centroid_face[0] - difX, centroid_face[0] + difX)
-        borderYp = (centroid_face[1] - difY, centroid_face[1] + difY)
-            '''
+            if self.turn >= 0 and not (
+                    borders['x']['min'] <= self.face.kps[2][0] <= borders['x']['max'] and \
+                    borders['y']['min'] <= self.face.kps[2][1] <= borders['y']['max']):
+                self.turn = -50
 
-            pass
         if use_nn and self.turn + turn_bias >= 0:
             img_for_selector = preprocess_input(self.crop_face, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             selector_out = frame_selector_model.run(None, {frame_selector_model_input_name: img_for_selector})[0]
@@ -252,7 +254,7 @@ class Person2:
         return min_dist
 
 
-def norm_crop_self_old(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
+def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
     def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
         inside = cv2.pointPolygonTest(countur.astype(np.float32),
                                       pt.astype(np.float32),
@@ -289,7 +291,7 @@ def norm_crop_self_old(img, landmark, image_size=112, mode='arcface', change_kps
     return warped, landmark, nose_inside
 
 
-def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
+def norm_crop_self_bad(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
     borderXp, borderYp = 100, 75
 
     def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
