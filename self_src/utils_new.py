@@ -29,10 +29,11 @@ class ArcFaceONNXVL(ArcFaceONNX):
         super().__init__(*args, **kwargs)
 
     def get(self, img, show=False):
+        embedding = self.get_feat(img).flatten()
         if show:
             plt.imshow(img)
+            plt.title('embedding is ready!')
             plt.show()
-        embedding = self.get_feat(img).flatten()
         return np.expand_dims(embedding, axis=0)
 
 
@@ -187,6 +188,7 @@ class Person2:
         self.label = label
         self.path = path
         self.crop_face = None
+        self.turn = None
         if full_img is not None:
             self.full_img = full_img
         if self.path is not None and full_img is None:
@@ -197,7 +199,7 @@ class Person2:
                                     # use_roi=(30, 10, 20, 28),  # how to change?
                                     min_face_size=(50, 50),  # how to change?
                                     )[0]
-            crop_face, face.kps, self.turn = norm_crop_self(self.full_img, face.kps, show=show)
+            crop_face, face.kps = norm_crop_self(self.full_img, face.kps, show=show)
             if change_brightness:
                 self.crop_face = brightness_changer(crop_face, etalon=bright_etalon)
             else:
@@ -205,20 +207,12 @@ class Person2:
         self.embedding = embedding if embedding is not None else recognator.get(self.crop_face, show=show)
         self.face = face
 
-    def get_label(self, persons,
-                  threshold=0.7, metric='cosine',
-                  turn_bias=0, use_nn=False, limits=None,
-                  show=False):
-        # TODO: add nn bad img filter
-        dists = []
-        for person in persons:
-            dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
-            dists.append(dist)
-        who = np.argmin(dists)
-        min_dist = round(dists[who], 5)
-        self.etalon_path = persons[who].path
-        self.etalon_crop = persons[who].crop_face
-        if limits is not None and self.turn + turn_bias >= 0:
+    def _get_turn(self, bias=0, limits=None, show=False):
+        countur = np.array([self.face.kps[1], self.face.kps[4], self.face.kps[3], self.face.kps[0]]).astype(np.float32)
+        nose = self.face.kps[2]
+        nose_inside = cv2.pointPolygonTest(countur, nose.astype(np.float32), measureDist=True)
+        nose_color = (0, 255, 0) if nose_inside + bias >= 0 else (255, 0, 0)
+        if limits is not None:
             get_middle = lambda p1, p2: [int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)]
             m_right = get_middle(self.face.kps[0], self.face.kps[3])
             m_lelf = get_middle(self.face.kps[1], self.face.kps[4])
@@ -232,12 +226,51 @@ class Person2:
             borders['x'] = {'min': centroid_face[0] - difX, 'max': centroid_face[0] + difX}
             borders['y'] = {'min': centroid_face[1] - difY, 'max': centroid_face[1] + difY}
 
-            if self.turn >= 0 and not (
+            if nose_inside + bias >= 0 and not (
                     borders['x']['min'] <= self.face.kps[2][0] <= borders['x']['max'] and \
                     borders['y']['min'] <= self.face.kps[2][1] <= borders['y']['max']):
-                self.turn = -50
+                nose_inside = -50
+                nose_color = (239, 114, 21)
+        if show:
+            cimg = self.crop_face.copy()
+            for idx_p, p in enumerate(self.face.kps):
+                cv2.circle(cimg, p, 1, landmarks_colors[idx_p], 1)
+            src = np.zeros(cimg.shape).astype(np.uint8)
 
-        if use_nn and self.turn + turn_bias >= 0:
+            if limits is not None:
+                borders32 = np.array([
+                    (borders['x']['min'], borders['y']['max']),
+                    (borders['x']['min'], borders['y']['min']),
+                    (borders['x']['max'], borders['y']['min']),
+                    (borders['x']['max'], borders['y']['max']),
+                ]).astype(np.float32)
+                cv2.polylines(src, np.int32([borders32]), True, (255, 255, 0), 1)
+                cv2.circle(src, centroid_face, 1, (255, 255, 0), 1)
+
+            cv2.polylines(src, np.int32([countur]), True, 255, 1)
+            cv2.circle(src, nose, 1, nose_color, 1)
+
+            concat = np.concatenate((cimg, src.astype(int)), axis=1)
+            plt.imshow(concat)
+            plt.title(f'"{nose_inside}" nose_inside face')
+            plt.show()
+        return nose_inside
+
+    def get_label(self, persons,
+                  threshold=0.7, metric='cosine',
+                  turn_bias=0, use_nn=False, limits=None,
+                  show=False):
+
+        self.turn = self._get_turn(limits=limits, bias=turn_bias, show=show)
+        dists = []
+        for person in persons:
+            dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
+            dists.append(dist)
+        who = np.argmin(dists)
+        min_dist = round(dists[who], 5)
+        self.etalon_path = persons[who].path
+        self.etalon_crop = persons[who].crop_face
+        if use_nn and self.turn >= 0:
             img_for_selector = preprocess_input(self.crop_face, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             selector_out = frame_selector_model.run(None, {frame_selector_model_input_name: img_for_selector})[0]
             good_frame = np.argmax(selector_out)  # bad = 0, good = 1
@@ -255,13 +288,6 @@ class Person2:
 
 
 def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
-    def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
-        inside = cv2.pointPolygonTest(countur.astype(np.float32),
-                                      pt.astype(np.float32),
-                                      measureDist=True)
-        return round(inside + bias, 2)  # positive (inside), negative (outside), or zero (on an edge) value
-
-    # TODO: add brightness
     M, pose_index = estimate_norm(landmark, image_size, mode)
     warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
     if change_kpss_for_crop:
@@ -271,82 +297,8 @@ def norm_crop_self(img, landmark, image_size=112, mode='arcface', change_kpss_fo
                 M[1][0] * point[0] + M[1][1] * point[1] + M[1][2]  # change Oy
             ], landmark)))  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
     landmark = landmark.astype(np.uint8)
-    without_nose = np.array([landmark[1], landmark[4], landmark[3], landmark[0]])
-    nose_inside = _get_nose_inside(without_nose, landmark[2], bias=0)
-    if show:
-        cimg = warped.copy()
-        for idx_p, p in enumerate(landmark):
-            cv2.circle(cimg, p, 1, landmarks_colors[idx_p], 1)
-
-        src = np.zeros(cimg.shape).astype(np.uint8)
-        nose_color = (0, 255, 0) if nose_inside >= 0 else (255, 0, 0)
-
-        cv2.polylines(src, np.int32([without_nose]), True, 255, 1)
-        cv2.circle(src, landmark[2], 1, nose_color, 1)
-
-        concat = np.concatenate((cimg, src.astype(int)), axis=1)
-        plt.imshow(concat)
-        plt.title(f'"{nose_inside}" nose_inside face')
-        plt.show()
-    return warped, landmark, nose_inside
-
-
-def norm_crop_self_bad(img, landmark, image_size=112, mode='arcface', change_kpss_for_crop=True, show=False):
-    borderXp, borderYp = 100, 75
-
-    def _get_nose_inside(countur, pt, bias=0):  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
-        inside = cv2.pointPolygonTest(countur.astype(np.float32),
-                                      pt.astype(np.float32),
-                                      measureDist=True)
-        return round(inside + bias, 2)  # positive (inside), negative (outside), or zero (on an edge) value
-
-    # TODO: add brightness
-    M, pose_index = estimate_norm(landmark, image_size, mode)
-    warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
-    if change_kpss_for_crop:
-        landmark = np.array(list(map(
-            lambda point: [
-                M[0][0] * point[0] + M[0][1] * point[1] + M[0][2],  # change Ox
-                M[1][0] * point[0] + M[1][1] * point[1] + M[1][2]  # change Oy
-            ], landmark)))  # r_eye 0, l_eye 1, nose 2, r_mouth 3, l_mouth 4
-    landmark = landmark.astype(np.uint8)
-    eye_mouth_countur = np.array([landmark[1], landmark[4], landmark[3], landmark[0]])
-    nose_inside = _get_nose_inside(eye_mouth_countur, landmark[2], bias=0)
-    if show:
-        cimg = warped.copy()
-        for idx_p, p in enumerate(landmark):
-            cv2.circle(cimg, p, 1, landmarks_colors[idx_p], 1)
-
-        only_landmarsk = np.zeros(cimg.shape).astype(np.uint8)
-        nose_color = (0, 255, 0) if nose_inside >= 0 else (255, 0, 0)
-
-        get_middle = lambda p1, p2: [int((p1[0] + p2[0]) / 2), int((p1[1] + p2[1]) / 2)]
-        m_right = get_middle(landmark[0], landmark[3])
-        m_lelf = get_middle(landmark[1], landmark[4])
-        m_eye = get_middle(landmark[0], landmark[1])
-        m_mouth = get_middle(landmark[3], landmark[4])
-
-        centroid_face = [int((m_eye[0] + m_mouth[0]) / 2), int((m_lelf[1] + m_right[1]) / 2)]
-
-        difX = int((m_lelf[0] - m_right[0]) / 100 * borderXp / 2)
-        difY = int((m_mouth[1] - m_eye[1]) / 100 * borderYp / 2)  # /2 for half
-        borderXp = (centroid_face[0] - difX, centroid_face[0] + difX)
-        borderYp = (centroid_face[1] - difY, centroid_face[1] + difY)
-
-        if nose_inside >= 0 and not (
-                borderXp[0] <= landmark[2][0] <= borderXp[1] and borderYp[0] <= landmark[2][1] <= borderYp[1]):
-            nose_color = (255, 255, 0)
-            nose_inside = -50
-
-        cv2.polylines(only_landmarsk, np.int32([eye_mouth_countur]), isClosed=True, color=(255, 255, 255), thickness=1)
-        cv2.circle(only_landmarsk, landmark[2], 1, nose_color, 1)
-        cv2.circle(only_landmarsk, centroid_face, 1, (255, 255, 255), 1)
-
-        concat = np.concatenate((cimg, only_landmarsk.astype(int)), axis=1)
-        plt.imshow(concat)
-        plt.title(f'"{nose_inside}" nose_inside face')
-        plt.show()
-    return warped, landmark, nose_inside
+    # TODO: add show
+    return warped, landmark
 
 
 def get_random_color():
