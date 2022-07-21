@@ -114,6 +114,7 @@ class RetinaDetector(FaceAnalysis):
             color = face['color'] if face.get('color') else (0, 255, 0)
             cv2.rectangle(dimg, (box[0], box[1]), (box[2], box[3]), color, 1)
             title = f'"{face.label}", ({round(float(face.det_score), 4)}, {round(float(face.rec_score), 4)}) turn={face.turn}, size={face.size}'
+            # title = face.label
             dimg = _cv2_add_title(dimg, title)
         if plot_crop_face:
             crops = [face.crop_face for face in faces]
@@ -168,7 +169,7 @@ detector = RetinaDetector(
     allowed_modules=['detection'],  # because need custom recognition module
     det_name='retinaface_mnet025_v2', rec_name='arcface_r100_v1',
 )
-detector.prepare(ctx_id=0, det_thresh=0.7)  # 0.5
+# detector.prepare(ctx_id=0, det_thresh=0.7)  # 0.5
 
 session = PickableInferenceSession(
     model_path=str(PARENT_DIR / 'models/IResNet100l.onnx'),
@@ -260,8 +261,6 @@ class Person2:
                   threshold=0.7, metric='cosine',
                   turn_bias=0, use_nn=False, limits=None,
                   show=False):
-
-        self.turn = self._get_turn(limits=limits, bias=turn_bias, show=show)
         dists = []
         for person in persons:
             dist = cdist(self.embedding, person.embedding, metric=metric)[0][0]
@@ -270,6 +269,7 @@ class Person2:
         min_dist = round(dists[who], 5)
         self.etalon_path = persons[who].path
         self.etalon_crop = persons[who].crop_face
+        self.turn = self._get_turn(limits=limits, bias=turn_bias, show=show)
         if use_nn and self.turn >= 0:
             img_for_selector = preprocess_input(self.crop_face, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             selector_out = frame_selector_model.run(None, {frame_selector_model_input_name: img_for_selector})[0]
